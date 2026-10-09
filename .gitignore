@@ -1,0 +1,17 @@
+# ani-kb-service 本地工件排除（KB-SPLIT-P5A / issue-068 独立仓库自含）。
+
+# Python 虚拟环境与工具缓存
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 本地环境文件（可能含凭据）——生产由 K8s Secret 注入，模板除外
+.env
+.env.*
+!.env.example
+
+# e2e 本地运行日志（tests/e2e/*_e2e.py 直跑产物）
+tests/e2e/*.log

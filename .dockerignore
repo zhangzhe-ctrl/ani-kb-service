@@ -1,0 +1,29 @@
+# kb-service 构建上下文排除（KB-SPLIT-P3B / issue-062 建立，P5A 随独立仓库迁移）。
+# 注意：Docker 只读取「构建上下文根目录」的 .dockerignore。独立仓库（P5A）的
+# CI 构建上下文是仓库根（见 .github/workflows/kb-service-ci.yml）。
+#
+# 关键：.venv 与 .env 绝不入镜像 —— 前者约 200MB 会撑爆镜像，后者可能含
+# PG/MinIO/Milvus 真实凭据（COPY 不认 .gitignore，只能靠本文件拦截）。
+
+# 版本控制与编辑器
+.git
+.gitignore
+.dockerignore
+
+# 本地虚拟环境与 Python 缓存
+.venv
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# 本地环境文件（可能含凭据）——生产由 K8s Secret 注入，不入镜像
+.env
+.env.*
+!.env.example
+
+# 开发/文档产物（运行时不需要，门禁在 CI 中执行）
+docs
+tests

@@ -1,0 +1,21 @@
+# kb-service dependencies (Python 3.11 + FastAPI + gRPC)
+# Pinned to versions verified in the local dev environment.
+fastapi==0.116.1
+uvicorn==0.35.0
+grpcio==1.83.0
+grpcio-tools==1.83.0
+protobuf==7.35.1
+pydantic==2.11.7
+pydantic-settings==2.14.2
+httpx==0.28.1
+asyncpg==0.30.0
+nats-py==2.9.0
+redis==5.2.0
+pymilvus==2.6.17       # D1 向量自管：直连独立 Milvus（issue-056）；版本经本地环境验证
+minio==7.2.15          # D1 对象自管：kb 自有 bucket 预签名直传（issue-058）；版本经本地环境验证
+jieba==0.42.1          # keyword tokenization (migrated from rag-engine to kb-service, Plan §3.6)；KB-SPLIT-P3A(#061) 钉死
+prometheus-client==0.26.0  # /metrics 领域指标端点（KB-SPLIT-P3C, issue-063，ADR §五-阶段3/4）；版本经本地环境验证
+
+# Test dependencies (issue-007)
+pytest==8.4.2
+pytest-asyncio==0.26.0
