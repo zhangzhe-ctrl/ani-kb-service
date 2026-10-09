@@ -66,4 +66,58 @@
 | 2 | 契约固化（#060，可与阶段 1 并行） | ✅ 完成（2026-09-28，KB-SPLIT-P2：#060 proto 契约固化——kb-service `proto/` 单一真源 + 三对镜像 sha256 逐字节一致（pin），生成命令与版本锁定落 `docs/specs/proto-contract.md`，`tests/test_proto_contract.py` 22 项契约测试（pin 双侧一致 / 生成物↔proto 源一致性 / rag EmbedResponse 扁平数组 / 上传三步流时效-key-双视角 / D2 租户上下文 / RPC 面 28 全量），全量 639 passed + 28 skipped + validate-architecture + `git diff --check` 通过） |
 | 3 | 构建/发布/运行独立（#061-#063，可与阶段 1 并行） | ✅ 完成（2026-10-08）（#061 KB-SPLIT-P3A 配置脱钩 ✅ 2026-10-08（`config.py` env_file 绝对路径锚定 kb 自有 `.env`、embedding 键 `KB_EMBEDDING_*` + AliasChoices 兼容旧键、新建 `.env.example` 全部配置项 + 敏感项占位符 + K8s Secret 注入说明、requirements `jieba==0.42.1` 全钉死，645 passed + 28 skipped + validate-architecture + `git diff --check` 通过；未新建 kb 专属 K8s 清单，随 P5 迁出落地）；#062 KB-SPLIT-P3B 独立 CI + SemVer ✅ 2026-10-08（`services/kb-service/Makefile` 自带门禁不依赖 monorepo 根：`test` = lint（ruff E9/F63/F7/F82 + mypy scripts）+ validate-architecture（SQL 集中化 + init/migration 一致性）+ validate-migrations（NNN baseline 结构）+ test-python；自包含校验脚本 `scripts/validate_kb_{migrations,sql_centralization,pg_init_consistency}.py` + `deploy/init-scripts/kb-pg/00_kb_dedicated_roles.sql`；独立 pipeline `.github/workflows/kb-service-ci.yml`（Path 过滤触发门禁 job、tag `kb-v*.*.*`/dispatch 触发镜像 job，SemVer 强校验 + buildx 多架构 + Trivy 阻断 + Cosign + digest 证据），kb 不在 monorepo `build-image.yml` 任何 matrix；镜像独立 SemVer tag `harbor.ani.internal/ani/kb-service:MAJOR.MINOR.PATCH`（首 v1.0.0），规则落 `docs/specs/semver-tagging.md`；`Dockerfile` EXPOSE 8002 + 50053；646 passed + 28 skipped + `git diff --check` 通过）；#063 KB-SPLIT-P3C 运行合同与可观测性 + 存储运维归属落地 ✅ 2026-10-08（`/readyz` 门控收敛为恰好三项 db + outbox_dispatcher + grpc，session_cache/consumers 只上报、NATS/rag-engine/Milvus/MinIO 走 `_probe_dependencies` TCP 探测上报项绝不门控；六类领域指标 `app/observability/metrics.py` 私有 `CollectorRegistry`（outbox 积压/consumer 在途重试/run 时长分布/三闸门命中/降级计数/presign-complete 成功率），标签只用有界枚举无高基数标签，41 处调用点接入，requirements 加 `prometheus-client==0.26.0`；日志关联四要素 `corr(request_id/kb_id/doc_id/run_id)` 结构化后缀不引入 logging 框架；运行合同保持（先订阅后 dispatcher/双 loop 资源绑定/JetStream ack 语义/优雅停机逆序）规格落 `docs/specs/observability.md`；Milvus 运维手册 `docs/runbook/storage-ops.md`（监控/备份/容量 + 现网 etcd 配额与 auto-compaction 教训继承：配额 8GiB、60% 阈值、CronJob `17 */6 * * *`、defrag `--command-timeout=300s`）；bucket `ani-kb-docs` 生命周期与配额 + presign 时效配置项化 `MINIO_PRESIGN_TTL_SECONDS` 默认 900s；`/metrics` 端点可被采集；修因子指标新增 `count_undispatched` 引入的 20 个 mock 回归——两 mock 连接类补 `fetchval`。验证：`make test` 全绿 646 passed + 28 skipped + validate-architecture + `git diff --check` 通过） |
 | 4 | 隔离验证（#066/#067） | ✅ 完成（2026-10-09）（#064 KB-SPLIT-P4A v1 解析路径收敛删除 ✅ 2026-10-08——v1 subject + flag 门控 + OFF 发 v1 逻辑删除，v2 唯一路径消费者常开，657 passed + 28 skipped + validate-architecture + `git diff --check`；#065 KB-SPLIT-P4B Core 调用面清零 ✅ 2026-10-08——`app/core_api/` 整模块删除 + NotifyDocumentUploaded RPC 双端删除（RPC 面 28→27）+ 配置/契约/OpenAPI/Gateway/SDK 残留清零，对视 Core 仅剩租户上下文信任、出向 Core HTTP 调用清零，627 passed + 28 skipped + validate-architecture + route contract 0 error + `git diff --check`；**#066 KB-SPLIT-P4C 独立测试环境全链路验收 ✅ 2026-10-09（e2e verified，独立环境 + 真实依赖）**——专属 PG `10.10.1.66:30946`（9 表无 RLS）+ 独立 NATS stream `ani.tasks.kb.*`（解析 `ani.tasks.kb.parse.v2`）+ 独立 Milvus `10.10.1.66:31930` + kb 自管 bucket `ani-kb-docs` + 真实 rag-engine + 真实 embedding 推理服务 `qwen3-embedding-0.6b`（dim=1024 经 SSH 隧道接入）；产品链路级全链路（上传三步流 → 解析 v2 ready chunk=9 → 分块 child=5/parent=4 → 图片入库 GetObjectURL 取回 673B → 向量化 → 检索三模式 hybrid=4/vector=5/keyword=5 overlap=4 → 三闸门 → 会话 SSE + Redis/DB 双写）；可观测性（/metrics 200 + 六类指标真实数据 + 无高基数标签 `{consumer,gate,le,operation,outcome}`）；会话降级（Redis 挂→DB-only 5/5 PASS；NATS 挂→outbox 积压 published=FALSE → 恢复追平 published=TRUE + 文档 ready）；生产代码改动仅 `main.py` NATS 启动超时修复（`_NATS_STARTUP_TIMEOUT_SECONDS=5.0` + `asyncio.wait_for` 仅约束初始 connect、保留运行时重连）使降级实例可启动；rag-engine 零改动（未加 `chat_template_kwargs`）。**验证：e2e PASS 58 / FAIL 0 / NOT_VERIFIED 4（exit 0，证据层次 源码级 3/真实依赖级 32/产品链路级 27）+ `make test`（627 passed + 28 skipped）+ validate-architecture + validate-migrations + `git diff --check` exit 0；4 条 not_verified 诚实分级。测试后远程 kb-service replicas 已恢复 0→1（1/1 Running）**；**#067 KB-SPLIT-P4D 专项回归 ✅ 2026-10-09（e2e verified，独立环境 + 真实依赖）**——复用 #066 e2e 基建（importlib 加载 `test_issue066_e2e`，覆写日志/tag），新增 `tests/e2e/test_issue067_e2e.py` 98 项检查五类专项：① 降级路径（Redis 挂→会话 DB-only + `/readyz` status=ok 门控语义 + `/health` 200 + `kb_degradation_total{session_cache,redis_unavailable}=3.0`；NATS 挂→outbox 积压 `published=FALSE` + `/readyz` status=degraded（outbox_dispatcher 门控、nats healthy=False 仅上报）→ 恢复追平 `published=TRUE` + 文档 ready，at-least-once）；② 重解析幂等（garbage pdf 自然失败→reparse 可重跑且操作行闭环终态；md 文档两轮 reparse 各生成新 run_id（T1≠T2，run_id 载体=kb_operations 行 id）、新旧 chunk_id 零交集（9→9 overlap=0）、Milvus 向量数符合基线不变量（subset=child，vec 5→5 未叠加旧值）、kb.reparse 事件 payload.task_id==run_id）；③ 跨租户负向 16 项（另一租户 GetKB/UpdateKB（持有者幂等键，无跨租户回放泄漏）/DeleteKB/GetUploadURL/ListDocuments/GetDocument/DeleteDocument/Chunks/Permissions/Sessions/Messages/DeleteSession/Reparse/AuditLogs 全 404、ListKBs 不含宿主、gRPC ListOperations 空集 + GetOperation NOT_FOUND，owner 对照全通过、负向后 owner 资源完好）；④ D1 专项（篡改预签名 key 被拒且无对象落地；GetObjectURL 三档拒绝——无 `/`→400、bucket≠自有→409、前缀≠`{kb_id}/`→409；`MINIO_PRESIGN_TTL_SECONDS=2` 过期 PUT/GET 均 **403** 且预定 key 无对象落地；图片 `{kb}/{doc}/images/` 前缀批量删除 + 正本 `{kb}/{doc}`（无文件名后缀 key 规则）一并删除 + chunk 行/向量归零）；⑤ D4 专项（CreateKB 同名确定性键 `create_kb:{tenant}:{name}` 回放同 kb_id 且 kb.create 操作行恰 1、UpdateKB 同键回放结果一致且该键操作行恰 1、Reparse 同键 pending/completed 双态回放同 task_id 且终态回放先于 ready 门、副作用核对——操作行/事件/向量均无重复）。**验证：e2e PASS 98 / FAIL 0 / NOT_VERIFIED 0（exit 0，证据层次 真实依赖级 73/正式进程级 5/产品链路级 20）+ `make test`（627 passed + 28 skipped）+ validate-architecture + `git diff --check` exit 0。测试后远程 kb-service replicas 已恢复 0→1**。生产代码零改动（纯测试批次；测试基建 3 处自我修正落档：Windows taskkill 后端口释放竞态需 wait-ports-closed、asyncpg 对 JSONB 返回 str 需 json.loads、`/readyz` session_cache 为构造态上报（aioredis 惰性连接不 ping，非连通态）） |
-| 5 | 仓库拆分 + 依赖方切换（#068/#069）+ 收尾（#070） | 未开始（依赖 4 验收通过） |
+| 5 | 仓库拆分 + 依赖方切换（#068/#069）+ 收尾（#070） | 🔄 进行中（#068 KB-SPLIT-P5A ✅ 2026-10-09——整目录迁移独立仓库 ani-kb-service（拆分 commit `c5eb39e`，squash 快照策略落档）、不带入清单最终核对零残留（见「阶段 5 执行记录」）、rag-engine 无状态化核验、monorepo 侧收尾（目录删除 + CODEOWNERS + Makefile/ruff/go.work/allowlist/boundary/文档表述摘除 kb 条目 + CI workflow 随迁）、回滚策略登记、独立仓库自含门禁全绿；#069 P5B 依赖方切换待办、#070 收尾待办） |
+
+## 阶段 5 执行记录（KB-SPLIT-P5A / issue #068，2026-10-09）
+
+### 拆分仓库与历史策略
+
+| 项 | 值 |
+|---|---|
+| 独立仓库 | `ani-kb-service`（自 ANI monorepo `repo/services/kb-service/` 整目录迁移，本文件随迁后继续作为拆分事务执行状态唯一真实来源） |
+| 拆分 commit | `c5eb39e`（main root-commit，154 files / 55922 insertions） |
+| 源快照 | monorepo 分支 `feat/split-kb-from-core` @ `4bc7ce09`（#065，分支末次提交）+ #066/#067 未提交验收态（tests/e2e 六个套件文件、main.py NATS 启动超时修复、本文件阶段 4 验收更新） |
+| git 历史保留策略 | **squash 单快照**（ADR §五-阶段5 允许 filter-repo 或 squash 二选一，选型理由落档）：monorepo 分支上 #066/#067 验收产物（e2e 套件等 6 个文件 + main.py 修复）从未提交，filter-repo/subtree-split 只能重写已提交历史、无法承载未提交工作区，逐 commit 演进经下节基线链在 monorepo 侧追溯；首个 commit 即完整目标态，符合「首发即目标态」（ADR rev2 修订说明） |
+| 随迁适配（迁移差异清单，其余整目录原样平移） | ① `.github/workflows/kb-service-ci.yml` 随迁并改仓库根上下文（`paths` 过滤移除、`KB_DIR` 删除、构建上下文 `context: .`/`file: Dockerfile`；SemVer tag 约定 `kb-v*.*.*` 与 buildx/Trivy/Cosign/digest 安全姿态不变）；② 新建 `.gitignore`（.venv/工具缓存/本地 .env/e2e 日志，monorepo 根 .gitignore 不随迁）；③ `tests/test_proto_contract.py` 跨仓库 proto pin 测试在镜像缺失（独立检出无 monorepo `api/proto/`、`ai/rag-engine/`）时 skip——镜像侧一致性归 monorepo 消费方（#069 依赖方切换），仓库内「生成物↔proto 源一致」12 项重生成比对测试继续强制；④ `.dockerignore` 头注释改指仓库根构建上下文 |
+
+### 基线可追溯闭环（ADR §三-4）
+
+`68bf198f`（#049 基线快照，2026-09-21）→ `feat/split-kb-from-core` 分支逐批提交（#050-#065）→ `4bc7ce09`（#065，分支末次提交）→ 工作区验收态（#066/#067，e2e 套件 + main.py 修复，未提交）→ **`c5eb39e`**（本仓库拆分 commit）。monorepo 侧保留分支与全部历史；本文件的差异清单各行（#050-#067 处置记录）即各阶段差异说明。
+
+### 不带入清单最终核对（ADR §五-阶段5，git grep 逐项，证据面 = 拆分 commit 工作树 tracked 文件）
+
+| 项 | 核对方式 | 结果 |
+|---|---|---|
+| v1 解析路径 | `git grep -E 'ani\.tasks\.kb\.parse\b'`（边界避开 v2 前缀重叠） | app/ 仅 2 处 docstring/注释历史说明（parse_consumer.py、config.py），零功能引用；发布/订阅面唯一 subject `ani.tasks.kb.parse.v2` |
+| flag 门控 | `git grep 'kb_parse_consumer_enabled'` / `git grep 'nats_parse_subject'` | flag 仅存注释与 ADR/status 历史记载；`tests/test_parse_consumer.py:1257-1258` 断言 `nats_parse_subject`/`kb_parse_consumer_enabled` 属性不存在（#064 回归守卫）；live 键仅 `nats_parse_subject_v2` |
+| NotifyDocumentUploaded | `git grep 'NotifyDocumentUploaded'` 全库 | app/proto/main.py/tests 零匹配（仅 docs/ ADR 与知会记录历史记载）；proto RPC 面 27 |
+| core_api 模块 | `git grep -iE 'core_api\|CoreClient'`（app/main.py/tests） | 零匹配 |
+| `app/generated` 散复制 | `git ls-files '*.proto'` + test_proto_contract 重生成比对 | 恰 4 个 .proto 全在 `proto/` 单一真源下（kb.v1/common.v1/rag.v1/inference.internal.v1），仓库内零散复制；`app/generated/*` 与 `app/rag_engine/rag_pb2*` 为 tracked 生成物，与源一致性由 12 项锁定版本重生成比对测试强制（通过） |
+| 共享 async_tasks/outbox_events 读写 | SQL 形态 `git grep -iE '(into\|from\|update\|join)\s+(kb_)?(outbox_events\|async_tasks)\b'` | 实态 SQL 全部为 `kb_outbox_events`/`kb_operations`（kb 自有表，migrations 009/010）；裸 `outbox_events`/`async_tasks` 仅存解释性注释（含 #051 移除说明）；SQL 集中化门禁通过 |
+
+### rag-engine 彻底无状态化核验（monorepo tracked 面，承接 #039/#064 验证记录）
+
+`git grep -E 'parse_worker|ani\.tasks\.kb\.parse' -- repo/ai/rag-engine` → 零匹配；`git grep -iE 'asyncpg|pymilvus|psycopg|milvus' -- repo/ai/rag-engine/app` → 零匹配。rag-engine 无 parse 消费路径、无 PG/向量库直写依赖（无状态 gRPC 计算引擎）。
+
+### monorepo 侧收尾清单（同日执行，删除与摘除明细）
+
+- 删除 `repo/services/kb-service/` 整目录（含 .venv 本地工件）与 `repo/.github/workflows/kb-service-ci.yml`（随迁本仓库）。
+- `.github/CODEOWNERS` 摘除 `/repo/services/kb-service/` 行（`/repo/api/proto/kb/` 与 Gateway `kb_resources*` 行保留至 #069）。
+- `repo/Makefile`：`validate-architecture` 摘除 `validate_kb_sql_centralization.py`/`validate_kb_pg_init_consistency.py` 两行 + 删除 `validate-kb-pg-init-consistency` 目标与 .PHONY 条目（kb 侧自含副本随迁生效）。
+- `repo/ruff.toml` 摘除 `services/kb-service/app/generated` 排除两行；`repo/go.work` 摘除 scaffold 注释 kb-service 行。
+- `repo/architecture/component-import-allowlist.yaml` 摘除 kb-service asyncpg bounded_direct 条目块（11 项，#054/#055 期间设立）。
+- `repo/scripts/validate_services_boundary.py` `SERVICES_OWNED_SOURCE_ROOTS` 摘除 `kb-service`（Gateway 禁导 kb-service Go 前缀 `FORBIDDEN_GATEWAY_SERVICE_IMPORT_PREFIXES` 保留——拆分后该边界仍成立）；`repo/scripts/validate_doc_entrypoints.py` 与 `ANI-05-系统架构设计.md` 同步摘除「kb-service 暂存 monorepo」表述。
+- `CLAUDE.md` §3.3、`ANI-SERVICES-TEAM-GUIDE.md` 更新为「kb-service 已拆分独立仓库 ani-kb-service」。
+- monorepo 保留项（依赖方切换归 #069 P5B）：`repo/api/proto/kb|common/v1/` Go proto 镜像、Gateway `kb_resources.go`/`kb_grpc_client.go`/`kb_sse.go` 路由、`repo/api/openapi/services/v1.yaml` 契约与 SDK、`repo/deploy/docker/`（docker-compose.kb-pg.yml + init-scripts/kb-pg，kb 专属 PG 本地部署载体）。
+
+### 回滚策略登记（ADR §五-阶段5：git revert + 镜像重建，不设专门预案）
+
+monorepo 侧回滚 = revert 本次收尾 commit（恢复目录与各门禁 kb 条目）；独立仓库侧回滚 = 仓库级回退（git revert / 重新 clone），镜像以最近可用 SemVer tag 重部署。无停写窗口/数据迁移/停用序列（rev2 无过渡性设计原则）。
+
+### 本批次门禁（独立仓库自含，2026-10-09）
+
+| 命令 | 结果 |
+|---|---|
+| `make test`（lint ruff E9/F63/F7/F82 + mypy scripts + validate-architecture（SQL 集中化 + PG init 一致性）+ validate-migrations（000..014）+ pytest） | ✅ 623 passed + 32 skipped（655 总数与 monorepo 阶段 4 基线一致；+4 skip = 跨仓库 proto pin 测试按随迁适配 skip） |
+| `make validate-architecture` | ✅（含于 make test 链） |
+| `git diff --check` | ✅ exit 0 |
