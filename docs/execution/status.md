@@ -104,6 +104,7 @@
 - 删除 `repo/services/kb-service/` 整目录（含 .venv 本地工件）与 `repo/.github/workflows/kb-service-ci.yml`（随迁本仓库）。
 - `.github/CODEOWNERS` 摘除 `/repo/services/kb-service/` 行（`/repo/api/proto/kb/` 与 Gateway `kb_resources*` 行保留至 #069）。
 - `repo/Makefile`：`validate-architecture` 摘除 `validate_kb_sql_centralization.py`/`validate_kb_pg_init_consistency.py` 两行 + 删除 `validate-kb-pg-init-consistency` 目标与 .PHONY 条目（kb 侧自含副本随迁生效）。
+- 删除 `repo/scripts/validate_kb_sql_centralization.py` 与 `repo/scripts/validate_kb_pg_init_consistency.py`（review-it 收口：校验对象已迁出、Makefile 引用已摘除后的死代码；kb 侧自含同名副本与门禁继续生效）。
 - `repo/ruff.toml` 摘除 `services/kb-service/app/generated` 排除两行；`repo/go.work` 摘除 scaffold 注释 kb-service 行。
 - `repo/architecture/component-import-allowlist.yaml` 摘除 kb-service asyncpg bounded_direct 条目块（11 项，#054/#055 期间设立）。
 - `repo/scripts/validate_services_boundary.py` `SERVICES_OWNED_SOURCE_ROOTS` 摘除 `kb-service`（Gateway 禁导 kb-service Go 前缀 `FORBIDDEN_GATEWAY_SERVICE_IMPORT_PREFIXES` 保留——拆分后该边界仍成立）；`repo/scripts/validate_doc_entrypoints.py` 与 `ANI-05-系统架构设计.md` 同步摘除「kb-service 暂存 monorepo」表述。
