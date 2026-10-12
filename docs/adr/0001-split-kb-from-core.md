@@ -1,6 +1,8 @@
 # ADR 0001: 将 kb-service 从 Core 中拆出（rev2）
 
-- 状态: Proposed（rev2 重构稿，待评审；替代 rev1 的全部阶段结论）
+- 状态: Accepted（2026-10-10，#070 收尾批次裁定；rev2 全部阶段结论已按 §五-阶段 0–5 执行并通过验收）
+- 拆分 commit: `c5eb39e`（kb-service 从 monorepo 拆出独立仓库 ani-kb-service，154 files / +55922）
+- 验收证据: `docs/execution/status.md`「阶段 5 收尾记录（KB-SPLIT-P5C / issue #070）」——全阶段（0–5）验收证据汇总、拆分目标五条核销、§七后果清单核销、演进期事项登记；批次门禁（`make test` / `make validate-architecture` / `make validate-services-route-contract` / `git diff --check`）双侧全绿
 - 日期: 2026-09-20（rev1: 2026-09-18）
 - 范围: kb-service（含其对 rag-engine 的编排关系）从 Core 共享基础设施与 monorepo 中解耦，独立维护
 - 依据: 全部结论来自当前代码实证（kb-service Python 源码、各 Go 服务源码、migrations DDL）与本轮评审新输入；不参考、不受约束于任何更早的规划文档

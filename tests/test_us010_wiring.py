@@ -56,7 +56,8 @@ class _QueryMockConn:
         # get_kb (KB existence check) → return a KB row with defaults
         if "FROM knowledge_bases" in sql:
             return {"top_k": 5, "score_threshold": 0.3, "retrieval_mode": "hybrid",
-                    "vector_store_id": "vs-test-001", "embedding_model": "bge-m3"}
+                    "vector_store_id": "vs-test-001", "embedding_model": "bge-m3",
+                    "default_inference_service": "qwen3-32b"}
         # create_session returns id; insert_message returns a row
         if "kb_audit_log" in sql:
             self.events.append(("insert_audit", args))
@@ -140,6 +141,25 @@ class _MockSessionCache:
         ]
 
 
+class _FakeInferenceServiceClient:
+    """Fake ResolveInternalEndpoint client: every model resolves to a canned
+    running endpoint so the strict Q&A path (which now aborts on missing /
+    unresolvable models) succeeds for tests that exercise downstream wiring."""
+
+    def __init__(self, base_url="http://svc.ani-tenant.svc.cluster.local:8000"):
+        self._base_url = base_url
+
+    async def resolve_endpoint(self, *, tenant_id, served_model_name):
+        from app.inference_service.client import ResolvedEndpoint
+
+        return ResolvedEndpoint(
+            base_url=self._base_url,
+            served_model_name=served_model_name,
+            task="generate",
+            status="running",
+        )
+
+
 def _make_query_servicer(*, pool=None, rag_grpc=None, retrieve_svc=None, cache=None):
     rag = rag_grpc or _MockRagGrpcClient()
     svc = retrieve_svc or _MockRetrieveService()
@@ -154,6 +174,7 @@ def _make_query_servicer(*, pool=None, rag_grpc=None, retrieve_svc=None, cache=N
         retrieve_service_factory=lambda tenant_id: svc,
         rag_engine_grpc_client_factory=lambda: rag,
         session_cache_factory=cache_factory,
+        inference_service_client_factory=lambda: _FakeInferenceServiceClient(),
     ), target_cache
 
 
@@ -632,13 +653,18 @@ class _KBDefaultPool:
         yield _KBDefaultConn(self._default)
 
 
-def _make_fallback_servicer(default_inference_service=None):
+def _make_fallback_servicer(default_inference_service=None, *, inference_client=None):
     rag = _RecordingRagGrpcClient()
     servicer = KBServiceServicer(
         pool=_KBDefaultPool(default_inference_service),
         retrieve_service_factory=lambda tenant_id: _MockRetrieveService(),
         rag_engine_grpc_client_factory=lambda: rag,
         session_cache_factory=lambda: _MockSessionCache(),
+        inference_service_client_factory=(
+            (lambda: inference_client)
+            if inference_client is not None
+            else (lambda: _FakeInferenceServiceClient())
+        ),
     )
     return servicer, rag
 
@@ -675,9 +701,9 @@ def test_query_request_level_inference_service_overrides_kb_default():
     assert rag.generate_kwargs[0]["inference_service_name"] == "deepseek-v3"
 
 
-def test_query_falls_back_to_default_when_kb_row_unset():
-    """M3: 请求与 KB 行都未设置 → ""（回落链第三级，rag-engine 端由
-    ``model or settings.vllm_model`` 接管默认模型）。"""
+def test_query_aborts_when_kb_row_unset_and_request_empty():
+    """M3: 请求与 KB 行都未设置 → 报错（回落链第三级不再是静默默认模型，
+    而是 INVALID_ARGUMENT）；生成请求不应发出。"""
     servicer, rag = _make_fallback_servicer(default_inference_service=None)
     ctx = _make_context()
     req = kb_pb.QueryRequest(
@@ -685,10 +711,10 @@ def test_query_falls_back_to_default_when_kb_row_unset():
         idempotency_key=str(uuid.uuid4()),
     )
     import asyncio
-    asyncio.new_event_loop().run_until_complete(servicer._query(req, ctx))
+    with pytest.raises(RuntimeError, match="no chat model configured"):
+        asyncio.new_event_loop().run_until_complete(servicer._query(req, ctx))
 
-    assert len(rag.generate_kwargs) == 1
-    assert rag.generate_kwargs[0]["inference_service_name"] == ""
+    assert len(rag.generate_kwargs) == 0
 
 
 def test_retrieve_stream_falls_back_to_kb_default_inference_service():

@@ -66,7 +66,7 @@
 | 2 | 契约固化（#060，可与阶段 1 并行） | ✅ 完成（2026-09-28，KB-SPLIT-P2：#060 proto 契约固化——kb-service `proto/` 单一真源 + 三对镜像 sha256 逐字节一致（pin），生成命令与版本锁定落 `docs/specs/proto-contract.md`，`tests/test_proto_contract.py` 22 项契约测试（pin 双侧一致 / 生成物↔proto 源一致性 / rag EmbedResponse 扁平数组 / 上传三步流时效-key-双视角 / D2 租户上下文 / RPC 面 28 全量），全量 639 passed + 28 skipped + validate-architecture + `git diff --check` 通过） |
 | 3 | 构建/发布/运行独立（#061-#063，可与阶段 1 并行） | ✅ 完成（2026-10-08）（#061 KB-SPLIT-P3A 配置脱钩 ✅ 2026-10-08（`config.py` env_file 绝对路径锚定 kb 自有 `.env`、embedding 键 `KB_EMBEDDING_*` + AliasChoices 兼容旧键、新建 `.env.example` 全部配置项 + 敏感项占位符 + K8s Secret 注入说明、requirements `jieba==0.42.1` 全钉死，645 passed + 28 skipped + validate-architecture + `git diff --check` 通过；未新建 kb 专属 K8s 清单，随 P5 迁出落地）；#062 KB-SPLIT-P3B 独立 CI + SemVer ✅ 2026-10-08（`services/kb-service/Makefile` 自带门禁不依赖 monorepo 根：`test` = lint（ruff E9/F63/F7/F82 + mypy scripts）+ validate-architecture（SQL 集中化 + init/migration 一致性）+ validate-migrations（NNN baseline 结构）+ test-python；自包含校验脚本 `scripts/validate_kb_{migrations,sql_centralization,pg_init_consistency}.py` + `deploy/init-scripts/kb-pg/00_kb_dedicated_roles.sql`；独立 pipeline `.github/workflows/kb-service-ci.yml`（Path 过滤触发门禁 job、tag `kb-v*.*.*`/dispatch 触发镜像 job，SemVer 强校验 + buildx 多架构 + Trivy 阻断 + Cosign + digest 证据），kb 不在 monorepo `build-image.yml` 任何 matrix；镜像独立 SemVer tag `harbor.ani.internal/ani/kb-service:MAJOR.MINOR.PATCH`（首 v1.0.0），规则落 `docs/specs/semver-tagging.md`；`Dockerfile` EXPOSE 8002 + 50053；646 passed + 28 skipped + `git diff --check` 通过）；#063 KB-SPLIT-P3C 运行合同与可观测性 + 存储运维归属落地 ✅ 2026-10-08（`/readyz` 门控收敛为恰好三项 db + outbox_dispatcher + grpc，session_cache/consumers 只上报、NATS/rag-engine/Milvus/MinIO 走 `_probe_dependencies` TCP 探测上报项绝不门控；六类领域指标 `app/observability/metrics.py` 私有 `CollectorRegistry`（outbox 积压/consumer 在途重试/run 时长分布/三闸门命中/降级计数/presign-complete 成功率），标签只用有界枚举无高基数标签，41 处调用点接入，requirements 加 `prometheus-client==0.26.0`；日志关联四要素 `corr(request_id/kb_id/doc_id/run_id)` 结构化后缀不引入 logging 框架；运行合同保持（先订阅后 dispatcher/双 loop 资源绑定/JetStream ack 语义/优雅停机逆序）规格落 `docs/specs/observability.md`；Milvus 运维手册 `docs/runbook/storage-ops.md`（监控/备份/容量 + 现网 etcd 配额与 auto-compaction 教训继承：配额 8GiB、60% 阈值、CronJob `17 */6 * * *`、defrag `--command-timeout=300s`）；bucket `ani-kb-docs` 生命周期与配额 + presign 时效配置项化 `MINIO_PRESIGN_TTL_SECONDS` 默认 900s；`/metrics` 端点可被采集；修因子指标新增 `count_undispatched` 引入的 20 个 mock 回归——两 mock 连接类补 `fetchval`。验证：`make test` 全绿 646 passed + 28 skipped + validate-architecture + `git diff --check` 通过） |
 | 4 | 隔离验证（#066/#067） | ✅ 完成（2026-10-09）（#064 KB-SPLIT-P4A v1 解析路径收敛删除 ✅ 2026-10-08——v1 subject + flag 门控 + OFF 发 v1 逻辑删除，v2 唯一路径消费者常开，657 passed + 28 skipped + validate-architecture + `git diff --check`；#065 KB-SPLIT-P4B Core 调用面清零 ✅ 2026-10-08——`app/core_api/` 整模块删除 + NotifyDocumentUploaded RPC 双端删除（RPC 面 28→27）+ 配置/契约/OpenAPI/Gateway/SDK 残留清零，对视 Core 仅剩租户上下文信任、出向 Core HTTP 调用清零，627 passed + 28 skipped + validate-architecture + route contract 0 error + `git diff --check`；**#066 KB-SPLIT-P4C 独立测试环境全链路验收 ✅ 2026-10-09（e2e verified，独立环境 + 真实依赖）**——专属 PG `10.10.1.66:30946`（9 表无 RLS）+ 独立 NATS stream `ani.tasks.kb.*`（解析 `ani.tasks.kb.parse.v2`）+ 独立 Milvus `10.10.1.66:31930` + kb 自管 bucket `ani-kb-docs` + 真实 rag-engine + 真实 embedding 推理服务 `qwen3-embedding-0.6b`（dim=1024 经 SSH 隧道接入）；产品链路级全链路（上传三步流 → 解析 v2 ready chunk=9 → 分块 child=5/parent=4 → 图片入库 GetObjectURL 取回 673B → 向量化 → 检索三模式 hybrid=4/vector=5/keyword=5 overlap=4 → 三闸门 → 会话 SSE + Redis/DB 双写）；可观测性（/metrics 200 + 六类指标真实数据 + 无高基数标签 `{consumer,gate,le,operation,outcome}`）；会话降级（Redis 挂→DB-only 5/5 PASS；NATS 挂→outbox 积压 published=FALSE → 恢复追平 published=TRUE + 文档 ready）；生产代码改动仅 `main.py` NATS 启动超时修复（`_NATS_STARTUP_TIMEOUT_SECONDS=5.0` + `asyncio.wait_for` 仅约束初始 connect、保留运行时重连）使降级实例可启动；rag-engine 零改动（未加 `chat_template_kwargs`）。**验证：e2e PASS 58 / FAIL 0 / NOT_VERIFIED 4（exit 0，证据层次 源码级 3/真实依赖级 32/产品链路级 27）+ `make test`（627 passed + 28 skipped）+ validate-architecture + validate-migrations + `git diff --check` exit 0；4 条 not_verified 诚实分级。测试后远程 kb-service replicas 已恢复 0→1（1/1 Running）**；**#067 KB-SPLIT-P4D 专项回归 ✅ 2026-10-09（e2e verified，独立环境 + 真实依赖）**——复用 #066 e2e 基建（importlib 加载 `test_issue066_e2e`，覆写日志/tag），新增 `tests/e2e/test_issue067_e2e.py` 98 项检查五类专项：① 降级路径（Redis 挂→会话 DB-only + `/readyz` status=ok 门控语义 + `/health` 200 + `kb_degradation_total{session_cache,redis_unavailable}=3.0`；NATS 挂→outbox 积压 `published=FALSE` + `/readyz` status=degraded（outbox_dispatcher 门控、nats healthy=False 仅上报）→ 恢复追平 `published=TRUE` + 文档 ready，at-least-once）；② 重解析幂等（garbage pdf 自然失败→reparse 可重跑且操作行闭环终态；md 文档两轮 reparse 各生成新 run_id（T1≠T2，run_id 载体=kb_operations 行 id）、新旧 chunk_id 零交集（9→9 overlap=0）、Milvus 向量数符合基线不变量（subset=child，vec 5→5 未叠加旧值）、kb.reparse 事件 payload.task_id==run_id）；③ 跨租户负向 16 项（另一租户 GetKB/UpdateKB（持有者幂等键，无跨租户回放泄漏）/DeleteKB/GetUploadURL/ListDocuments/GetDocument/DeleteDocument/Chunks/Permissions/Sessions/Messages/DeleteSession/Reparse/AuditLogs 全 404、ListKBs 不含宿主、gRPC ListOperations 空集 + GetOperation NOT_FOUND，owner 对照全通过、负向后 owner 资源完好）；④ D1 专项（篡改预签名 key 被拒且无对象落地；GetObjectURL 三档拒绝——无 `/`→400、bucket≠自有→409、前缀≠`{kb_id}/`→409；`MINIO_PRESIGN_TTL_SECONDS=2` 过期 PUT/GET 均 **403** 且预定 key 无对象落地；图片 `{kb}/{doc}/images/` 前缀批量删除 + 正本 `{kb}/{doc}`（无文件名后缀 key 规则）一并删除 + chunk 行/向量归零）；⑤ D4 专项（CreateKB 同名确定性键 `create_kb:{tenant}:{name}` 回放同 kb_id 且 kb.create 操作行恰 1、UpdateKB 同键回放结果一致且该键操作行恰 1、Reparse 同键 pending/completed 双态回放同 task_id 且终态回放先于 ready 门、副作用核对——操作行/事件/向量均无重复）。**验证：e2e PASS 98 / FAIL 0 / NOT_VERIFIED 0（exit 0，证据层次 真实依赖级 73/正式进程级 5/产品链路级 20）+ `make test`（627 passed + 28 skipped）+ validate-architecture + `git diff --check` exit 0。测试后远程 kb-service replicas 已恢复 0→1**。生产代码零改动（纯测试批次；测试基建 3 处自我修正落档：Windows taskkill 后端口释放竞态需 wait-ports-closed、asyncpg 对 JSONB 返回 str 需 json.loads、`/readyz` session_cache 为构造态上报（aioredis 惰性连接不 ping，非连通态）） |
-| 5 | 仓库拆分 + 依赖方切换（#068/#069）+ 收尾（#070） | 🔄 进行中（#068 KB-SPLIT-P5A ✅ 2026-10-09——整目录迁移独立仓库 ani-kb-service（拆分 commit `c5eb39e`，squash 快照策略落档）、不带入清单最终核对零残留（见「阶段 5 执行记录」）、rag-engine 无状态化核验、monorepo 侧收尾（目录删除 + CODEOWNERS + Makefile/ruff/go.work/allowlist/boundary/文档表述摘除 kb 条目 + CI workflow 随迁）、回滚策略登记、独立仓库自含门禁全绿；#069 P5B 依赖方切换待办、#070 收尾待办） |
+| 5 | 仓库拆分 + 依赖方切换（#068/#069）+ 收尾（#070） | ✅ 完成（2026-10-10）（#068 KB-SPLIT-P5A ✅ 2026-10-09——整目录迁移独立仓库 ani-kb-service（拆分 commit `c5eb39e`，squash 快照策略落档）、不带入清单最终核对零残留（见「阶段 5 执行记录」）、rag-engine 无状态化核验、monorepo 侧收尾（目录删除 + CODEOWNERS + Makefile/ruff/go.work/allowlist/boundary/文档表述摘除 kb 条目 + CI workflow 随迁）、回滚策略登记、独立仓库自含门禁全绿；**#069 KB-SPLIT-P5B ✅ 2026-10-10——Gateway 与依赖方最终切换（见「阶段 5 执行记录（P5B）」）**：Gateway KB 路由指向独立 kb-service gRPC :50053（部署清单 + 注释落档、集群实态一致）、task 路由 D4 处置落档 + 对接知会、前端上传链路（D1）切换确认 + #049 知会闭环、P5A 移交契约面 2 error 清偿（v1.yaml security+x-ani-authz）与 proto pin 断言恢复（22 passed 0 skipped）、#066 环境复跑全链路 PASS 59 / FAIL 0 / NOT_VERIFIED 3 零回归 + 部署级证据三点；**#070 KB-SPLIT-P5C ✅ 2026-10-10——全量验收 + 文档闭环四件套 + ADR 0001 状态更新（见「阶段 5 收尾记录（P5C）」）**：阶段 0–5 验收证据汇总落档（含 not_verified 演进期豁免登记）、拆分目标五条核销、§七后果清单核销 + Milvus/bucket 运维责任交接确认、阶段 6 演进期事项登记、ADR 0001 状态 Proposed → Accepted，**拆分批次正式关闭**） |
 
 ## 阶段 5 执行记录（KB-SPLIT-P5A / issue #068，2026-10-09）
 
@@ -122,3 +122,113 @@ monorepo 侧回滚 = revert 本次收尾 commit（恢复目录与各门禁 kb �
 | `make test`（lint ruff E9/F63/F7/F82 + mypy scripts + validate-architecture（SQL 集中化 + PG init 一致性）+ validate-migrations（000..014）+ pytest） | ✅ 623 passed + 32 skipped（655 总数与 monorepo 阶段 4 基线一致；+4 skip = 跨仓库 proto pin 测试按随迁适配 skip） |
 | `make validate-architecture` | ✅（含于 make test 链） |
 | `git diff --check` | ✅ exit 0 |
+
+## 阶段 5 执行记录（KB-SPLIT-P5B / issue #069，2026-10-10）
+
+### Gateway 与依赖方最终切换（依赖方视角验收，monorepo 侧改动，记录：`repo/development-records/KB-SPLIT-P5B.md`）
+
+| 项 | 处置 | 结果 |
+|---|---|---|
+| Gateway KB 路由指向（ADR §一-1.6） | monorepo 部署清单 `sprint13-production-shaped-gateway-deployment.yaml` 落档 `KB_SERVICE_GRPC_ADDR=kb-service.ani-system.svc.cluster.local:50053`（timeout 30s，与集群实态逐字一致）+ `kb_grpc_runtime.go` 注释更新（独立 kb-service :50053，纯 gRPC 代理不直连 kb 表，空地址 503 降级不变）；生产代码零行为变更 | ✅ |
+| task 路由 D4 处置落档（ADR §D4/§五-阶段6） | Gateway `task_resources.go` 文件头处置注释（async_tasks 归 task 域资产、kb 自 #051 不再写共享表、演进期 task-service 就绪后接）+ 对接知会登记；不改 task 路由 | ✅ |
+| 前端上传链路切换确认（ADR §D1） | 上传三步流（Gateway → kb 预签名 → 直传 MinIO NodePort → Gateway → kb complete）e2e 全程 PASS；与 #049 前端排期知会闭环（P1I/P1J 知会保持有效，本批为切换完成确认） | ✅ |
+| P5A 移交契约面清偿 | monorepo `v1.yaml` completeDocumentUpload/getKnowledgeBaseObjectURL 补 `security`+`x-ani-authz`（v1/knowledge_base/create·read/tenant/[user]），`validate_services_contract.py` **2 error→0**（111 accepted warning 不变）+ 校验器单测 8 OK | ✅ |
+| P5A 移交 proto pin 断言恢复 | `tests/test_proto_contract.py` 镜像根三级解析修复（原 parents[2] 拆分布局下恒指向 Desktop 致 4 项 pin 恒 skip）；修复后 **22 passed / 0 skipped**——kb.v1/common.v1/rag.v1/inference.internal.v1 四对镜像逐字节 pin 在「本仓库 + 并排 monorepo repo/」工作区内真实强制（与手工 sha256 比对双证一致）；真独立检出仍按 P5A 语义 skip | ✅ |
+| #066 环境复跑全链路（ADR §五-阶段4） | e2e 路径适配拆分布局（KB_ROOT/REPO 分离：kb=本仓库、rag-engine/gateway exe=monorepo），gateway 以 `KB_SERVICE_GRPC_ADDR=localhost:50053` 驱动本仓库进程：**PASS 59 / FAIL 0 / NOT_VERIFIED 3**（exit 0，tag=e2e066-1791600485，源码级 3/真实依赖级 32/产品链路级 27；较 #066 基线 +1 PASS=闸门① 检索空自然触发，3 条 not_verified 与基线相同，零回归）；SSE `token*→sources→done` 经新指向端到端 PASS | ✅ |
+| 部署级证据（real-k8s-lab/p5b_deploy_evidence_1010.sh） | ① gateway deployment env 指向 `kb-service.ani-system.svc.cluster.local:50053`；② kb-service Service endpoints `10.16.2.248:50053,10.16.2.248:8002`；③ 节点侧 ClusterIP:50053 HTTP/2 裸帧 gRPC Health/Check → http_code=200。e2e 期间集群 kb-service scale 0（NATS durable 竞争，components.md 既有约定）测后恢复 replicas=1（1/1 Running 已核实） | ✅ |
+| CODEOWNERS 状态（P5A「保留至 #069」两行重审） | `/repo/api/proto/kb/`（Go 镜像消费方）与 Gateway `kb_resources*`（路由代理代码）确认保留——切换是地址级而非代码迁移，两行属 monorepo 侧消费资产，共同审查领地不变；注释更新为切换完成态 | ✅ |
+
+### P5B 批次门禁（2026-10-10）
+
+| 命令 | 结果 |
+|---|---|
+| 独立仓库 `pytest tests`（.venv） | ✅ **628 passed + 28 skipped**（pin 修复后终态：P5A 的 +4 skip 全部回归为真实断言，skip 数与拆分前基线一致，零回归） |
+| `pytest tests/test_proto_contract.py -rs` | ✅ **22 passed（0 skipped）**——跨仓库 pin 断言自 P5A 平移后首次真实生效 |
+| `ruff check --select E9,F63,F7,F82`（改动文件 e2e + proto_contract） | ✅ All checks passed（仓库门禁口径） |
+| `git diff --check` | ✅ exit 0 |
+| monorepo 侧门禁 | ✅ 等价直跑全绿（route contract 0 error / services contract 0 error / gateway-authz 327 路由 0 error / go test 51 包 ok，唯二 FAIL=pkg/adapters/runtime symlink ×2 为阶段 0 登记的 Windows 预存环境失败）——明细见 `repo/development-records/KB-SPLIT-P5B.md` |
+
+## 阶段 5 收尾记录（KB-SPLIT-P5C / issue #070，2026-10-10）
+
+> 拆分批次收尾：全量验收 + 文档闭环四件套 + ADR 0001 状态更新 + 演进期登记。**本批次为文档收尾性质，无业务代码改动**（ADR 0001 §五-阶段5、§三、§六、§七；依赖 #068/#069）。
+
+### 全阶段验收证据汇总（AC1，ADR §五-阶段4/5）
+
+> 每阶段证据按三态 `pass / fail / not_verified` 汇总；`not_verified` 项均附演进期豁免登记（见下小节），无未登记遗留。
+
+| 阶段 | 批次 / issue | 验证层次 | 证据三态 | 关键证据 |
+|---|---|---|---|---|
+| 0 基线固定 | KB-SPLIT-P0 / #049 | 源码级 | **pass** | 基线快照 commit `68bf198f`；差异清单 10 项 × 处置 issue 落档；基线门禁全绿（validate-architecture + go test + `git diff --check`） |
+| 1 数据与存储基线 | #050-#059 / P1A-P1J | 真实依赖级 | **pass** | kb 专属 PG 5433/kb 真实 28/28 跨租户负向全绿（#055）；向量自管 Milvus 往返（#057）、对象自管 bucket 预签名（#058/#059）；全量单测 615 passed + 28 skipped |
+| 2 契约固化 | KB-SPLIT-P2 / #060 | 源码级 | **pass** | proto 单一真源 + 三对镜像 sha256 逐字节 pin；`test_proto_contract.py` 22 项契约测试通过；生成命令与版本锁定落 `docs/specs/proto-contract.md` |
+| 3 构建/发布/运行独立 | #061-#063 / P3A-P3C | 源码级 | **pass** | 配置脱钩（`.env.example` + `KB_EMBEDDING_*`）；独立 CI + SemVer tag（`kb-v*.*.*`）；`/readyz` 三项门控 + 六类领域指标 + Milvus 运维手册就位 |
+| 4 隔离验证 | #066/#067 / P4C-P4D | 产品链路级 | **pass** | 独立环境真实依赖全链路 PASS 59 / FAIL 0 / NOT_VERIFIED 3（#069 复跑，零回归）；专项回归 D1/D4/降级/幂等/跨租户 e2e PASS 98 / FAIL 0 / NOT_VERIFIED 0 |
+| 5 仓库拆分 + 切换 + 收尾 | #068/#069/#070 / P5A-P5C | 部署级 | **pass** | 拆分 commit `c5eb39e`（154 files / 55922 insertions）；Gateway 指向独立 kb-service :50053（部署级证据三点）；独立仓库 pytest 628 passed + 28 skipped；双侧门禁全绿 |
+
+### not_verified 演进期豁免登记（AC1）
+
+| 项 | 来源 | 未验证原因 | 豁免 / 处置 |
+|---|---|---|---|
+| 摘要生成 content=null | #066 P4C AC | 推理模型对空/短输入返回 null，属模型侧行为非 kb 缺陷 | **演进期豁免**：不影响状态机与链路；如需收敛另立批次（不在拆分范围） |
+| 闸门①「检索空」未自然触发 | #066 P4C AC | 真实语料检索恒非空，难以在真实环境构造 | **已消解**：#069 P5B 复跑时自然触发（PASS 59 较基线 +1），转 pass |
+| 闸门③「safety net unreachable」 | #066 P4C AC | 防御性分支在真实链路不可达（去重后 sources 空为理论态） | **演进期豁免**：代码分支由单测覆盖，产品链路不可达属设计内；保留 not_verified 不虚报 |
+| AC④-2 降级指标 = dispatcher 门控设计 | #066 P4C AC | NATS 挂时 `published=FALSE` 由 outbox_dispatcher 门控使实例 degraded，属设计内语义 | **演进期豁免**：已由 #067 专项回归（`/readyz` status=degraded 路径）真实覆盖，非缺陷 |
+
+> 结论：阶段 0–5 无未登记 `not_verified` 遗留；4 条 not_verified 中 1 条已消解、3 条为设计内/模型侧行为并登记为演进期豁免。
+
+### 拆分目标五条核销（AC3，ADR §三）
+
+| # | 目标 | 核销 issue | 核销结论 |
+|---|---|---|---|
+| 1 | 独立维护（独立仓库/构建/版本/进程） | #062（独立 CI + SemVer）、#068（整目录迁出） | ✅ 独立仓库 `ani-kb-service`（首次 v1.0.0，`kb-v*.*.*` tag），独立 Makefile/CI 流水线/镜像，不挂 monorepo matrix |
+| 2 | 独立持久化与存储 | #053（B 层 DDL 基线）-#058（对象自管） | ✅ A+B 层 + kb 自有 outbox（#050）+ kb_operations（#051）纳入单一 DDL 权威；独立 Milvus（#056/#057）+ 自有 bucket（#058/#059）；显式租户隔离不依赖 RLS（#054/#055） |
+| 3 | 契约版本化且可演进 | #060（proto pin）、#065（Core 契约面归零） | ✅ 对上 proto + rag-engine proto 固定版本 pin（sha256 逐字节）；对 Core 无调用即无契约（`core_api` 删除、RPC 面 28→27） |
+| 4 | 基线可追溯 | #049→#068 diff 链 | ✅ `68bf198f`（#049 基线）→ 分支 #050-#065 → `4bc7ce09`（#065）→ 工作区验收态 → `c5eb39e`（拆分 commit）；差异清单各行即各阶段差异说明 |
+| 5 | 首发即目标态 | #064/#065 不带入清单核销 | ✅ v1 解析路径/flag 门控（#064）、NotifyDocumentUploaded/core_api/共享表读写（#065）以「代码不带入」消失；无迁移/停用/回滚预案，回滚 = git revert + 镜像重建 |
+
+### ADR §七后果清单核销（AC6）
+
+| 类型 | 条目 | 核销结论 |
+|---|---|---|
+| 正面红利 | kb 获得 A+B 层 + outbox + 幂等表单一 DDL 权威 | ✅ #053/#050/#051 落实 |
+| 正面红利 | 向量与对象完全自管，热路径内网直连、少一跳 Core、URL 自主签发 | ✅ #056-#059 落实；#066 全链路真实依赖验证 |
+| 正面红利 | 图片删除缺口从设计上不存在 | ✅ #059 前缀批量删除 + #067 D1 专项验证 |
+| 正面红利 | Core 契约面为零，core_api 不带入 | ✅ #065 删除，grep 零匹配 |
+| 正面红利 | 租户隔离从 RLS/GUC 转为显式约束 | ✅ #054 复合外键 + 显式过滤 + 跨租户负向测试 |
+| 正面红利 | 三份 proto 复制收敛 | ✅ #060 单一真源 + 镜像 pin |
+| 正面红利 | v1 不带入后 kb 唯一编排者，rag-engine 彻底无状态化 | ✅ #064/#039；rag-engine 侧 grep 零匹配 |
+| 正面红利 | C 层争议消解（outbox 模式归位、task 资产留给 task 域） | ✅ #050 outbox 自持 + #051 幂等本地化 + #069 task 路由知会 |
+| 正面红利 | 首发即目标态，无过渡性负担 | ✅ rev2 修订说明落实，无停写窗口/迁移/回滚预案 |
+| 代价 | kb 承接 Milvus 与 bucket 运维责任 | ✅ **运维责任交接确认**：`docs/runbook/storage-ops.md`（#063 就位）——Milvus 监控/备份/容量 + etcd 配额与 auto-compaction 教训继承；bucket `ani-kb-docs` 生命周期/配额 + presign 时效配置化 |
+| 代价 | 预签名直传需前端配合改造 + 时效/越权测试面 | ✅ #066/#067 D1 专项（过期 URL 403、key 越权 409、篡改 key 拒绝），#049 前端知会闭环（#069 确认切换完成） |
+| 代价 | D2 暂缓意味着租户校验依赖 Gateway 信任链 | ✅ 原样保留，边界收敛 + 钩子留下（见演进期登记） |
+| 明确不做 | 不换向量引擎 / 不动身份机制 / 不做通用文件服务 / 不设过渡性设计 | ✅ 全部遵守（冻结纪律，stage 0 落档） |
+
+### 演进期（阶段 6）事项登记（AC5，ADR §五-阶段6）
+
+> 本批次**不建 issue**，仅登记待后续规划排期。
+
+| 事项 | 触发条件 | 备注 |
+|---|---|---|
+| pgvector 替代独立 Milvus 收敛评估 | 规模允许时 | 拆分期间遵守「平移优先」纪律未换引擎；评估消一套运维（ADR §D1、§1.5） |
+| task-service 就绪后承接任务展示 | task-service 拆分完成 | kb 只承诺 outbox 事件 schema 稳定 + at-least-once；Gateway task 路由届时接 task-service（D4 解耦接口；#069 已落注释知会） |
+| D2 身份机制调整 | 服务间认证换型需求出现 | 只改边界层与租户校验实现，不动业务逻辑；届时另立 ADR |
+| 未来 Core 依赖 RFC 流程 | 出现新 Core 依赖 | kb 提案（端点/动机/兼容性）→ Core 评审 → 发新版本 → pin 升级；不允许静默变更（ADR §D3） |
+
+### ADR 0001 状态更新（AC4）
+
+- 执行侧（唯一权威）`docs/adr/0001-split-kb-from-core.md` 与规划侧（历史稿）`repo/services/tasks/modules/plan/knowledge_base/0001-split-kb-from-core.md` 状态行 **Proposed → Accepted**。
+- 附引用：拆分 commit `c5eb39e`；验收证据 = 本文件阶段 0–5 证据汇总 + `repo/development-records/KB-SPLIT-P5C.md`。
+
+### P5C 批次门禁（2026-10-10，双侧）
+
+| 命令 | 结果 |
+|---|---|
+| 独立仓库 `make test`（lint + validate-architecture + validate-migrations + pytest） | ✅ **628 passed + 28 skipped** + ruff All checks passed + mypy Success + SQL 集中化/init 一致性/migration baseline 全绿 |
+| 独立仓库 `git diff --check` | ✅ exit 0 |
+| monorepo `make validate-services-route-contract` | ✅ 9 accepted / **0 error** + 校验器单测 7 OK |
+| monorepo `git diff --check` | ✅ exit 0 |
+
+### 拆分批次关闭
+
+KB-SPLIT 全系 #049–#070 全部关闭；拆分工程（阶段 0–5）完成，阶段 6 演进期事项已登记。**kb-service 拆分批次正式关闭。**

@@ -612,13 +612,22 @@ async def _probe_dependencies() -> dict[str, Any]:
         "healthy": _nats_client is not None and _nats_client.is_connected,
         "detail": "connected" if _nats_client is not None else "not configured",
     }
-    rag_engine, milvus, minio = await asyncio.gather(
+    # Redis is reported as a TCP-reachable dependency so a Redis outage is
+    # visible on /readyz even though _session_cache is a construction-time
+    # object (aioredis.from_url does not connect) and therefore does not
+    # reflect liveliness. Report-only: Redis down is in-design degradation
+    # (Query falls back to DB-only, ADR §一-1.3), never gating.
+    parsed_redis = urllib.parse.urlsplit(settings.redis_url)
+    redis_addr = f"{parsed_redis.hostname or ''}:{parsed_redis.port or 6379}"
+    redis, rag_engine, milvus, minio = await asyncio.gather(
+        _probe_tcp(redis_addr),
         _probe_tcp(settings.rag_engine_grpc_addr),
         _probe_tcp(settings.milvus_addr),
         _probe_tcp(settings.minio_endpoint),
     )
     return {
         "nats": nats,
+        "redis": redis,
         "rag_engine": rag_engine,
         "milvus": milvus,
         "minio": minio,

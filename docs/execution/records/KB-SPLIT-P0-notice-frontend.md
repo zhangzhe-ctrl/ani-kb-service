@@ -28,3 +28,57 @@
 | 日期 | 回执方 | 结论 |
 |---|---|---|
 | 2026-09-21 | — | 知会发出，待回复 |
+
+---
+
+## 补充（2026-10-12）：501 `Method not found!` 定性 + 最终三步契约
+
+### 现场现象
+
+前端上传文档时，`POST /api/v1/svc/knowledge-bases/{kb_id}/documents/{doc_id}/notify-uploaded`
+（经 `ani-console` NodePort **30081** 代理到 `ani-gateway`）返回 **501 Not Implemented**，
+body `{"message": "Method not found!"}`。
+
+### 定性结论：后端源码无缺陷，是**线上 gateway 版本落后**
+
+三重证据：
+
+1. **源码侧**：`ani-gateway` HEAD 的 [kb_resources.go](../../../../repo/services/ani-gateway/internal/router/kb_resources.go) **已无**
+   `notify-uploaded` 路由与 handler（`4bc7ce09`，#065 删除）；`ani-kb-service` HEAD 的
+   [kb_service.proto](../../proto/kb/v1/kb_service.proto) **已删** `NotifyDocumentUploaded` RPC。
+   gRPC Python 对未实现方法返回默认 `b"Method not found!"`，经
+   [kb_grpc_client.go `mapGRPCError`](../../../../repo/services/ani-gateway/internal/router/kb_grpc_client.go#L497-L513)
+   `Unimplemented → 501` 透传，故出现 `501 / Method not found!`。
+2. **线上 gateway 实测（NodePort 30080 直连）**：
+   - `POST .../notify-uploaded` → **401**（路由**存在**，被鉴权拦截，说明仍是旧版本注册了旧路由）
+   - `POST .../documents/{doc_id}/complete` → **404**（新路由**不存在**）
+   - `POST .../documents` → 401（存在）
+3. **镜像版本**：线上 `ani-gateway` 运行 `docker.changqingyun.cn/ani/ani-gateway:test2-20261009-vmstart`
+   （Oct 9 构建），**落后于** KB 拆分切换（`4bc7ce09` 于 10-08 删旧路由、`c7c119ae` 于 09-28 加三步流）。
+   线上 `kb-service` 已是 `kb-20261012-head-a5f8fe9-r2`（新）。
+
+> 结论：**不是后端 HEAD 的问题**。旧 gateway 把 `notify-uploaded` 转发给新 kb-service，
+> 新 kb-service 无此 RPC → 501。前端必须改新契约，**且 gateway 必须重新构建/部署**到含
+> `/complete` 的版本，否则新契约前端仍会 404。
+
+### 上传契约对照（旧 → 新）
+
+| 步骤 | 旧（Core 时代，已废弃） | 新（kb 自管，ADR §D1） |
+|---|---|---|
+| 1 | `POST /knowledge-bases/{kb_id}/documents`（Core 上传） | `POST /knowledge-bases/{kb_id}/documents`（`getDocumentUploadURL`）→ 200 `{doc_id, upload_url, storage_path}` |
+| 2 | `PUT MinIO`（Core 代传） | 前端**直传** MinIO：`PUT {upload_url}`（presigned，**15 分钟有效**） |
+| 3 | `POST .../documents/{doc_id}/notify-uploaded`（**已删除**） | `POST .../documents/{doc_id}/complete`（`completeDocumentUpload`）→ **202** `{task_id, task_type, status}` |
+
+### 前端需要的修改
+
+1. **删除**对 `.../notify-uploaded` 的调用（该端点在拆分后不复存在，任何情况下都会 501）。
+2. **step 1 改为**：`POST /knowledge-bases/{kb_id}/documents`，body：
+   `{idempotency_key(uuid, 必填), file_name(必填), file_type(必填), file_size_bytes, checksum_sha256, custom_metadata}`；
+   响应 200 `{doc_id, upload_url, storage_path}`。
+3. **step 2**：对 `upload_url` 执行 `PUT`（原始二进制，15 分钟内完成；无需带 gateway token）。
+4. **step 3 改为**：`POST /knowledge-bases/{kb_id}/documents/{doc_id}/complete`，body：
+   `{idempotency_key(uuid, 必填), file_name(必填), file_type(必填), checksum_sha256, custom_metadata}`；
+   `doc_id` 取自 step 1 响应，**走路径**；响应 202 `{task_id, task_type, status}`，用 tasks API 轮询解析结果。
+5. **鉴权**：三步均需携带既有 gateway 鉴权头（Bearer/ApiKey）；401 即未带/失效。
+6. 契约真源：[api/openapi/services/v1.yaml](../../../../repo/api/openapi/services/v1.yaml#L2704-L2780)。
+7. **部署前置**：需先把 gateway 重新构建并部署到含 `/complete` 的版本（当前线上为旧构建）。

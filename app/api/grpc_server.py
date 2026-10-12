@@ -209,11 +209,14 @@ class KBServiceServicer(pb_grpc.KBServiceServicer):
 
         Degrades to ("", "") (rag-engine then uses its server-default endpoint
         and the caller keeps the original model name) when the model is empty,
-        no client is wired, or resolution fails — this keeps the CreateKB
-        dimension probe best-effort and lets the KB remain usable when a
-        service is temporarily unpublished. A failure is logged at warning
-        level with model + tenant so it is not silent. ``base_url`` is a
-        runtime snapshot: it is re-resolved on every call, never cached.
+        no client is wired, or resolution fails. This BEST-EFFORT behaviour is
+        only for the non-Q&A chains: the CreateKB dimension probe (which must
+        not block KB creation) and the background document consumers. The
+        Q&A path (Query/Retrieve) instead uses
+        ``_resolve_required_runtime_endpoint`` which never silently falls back.
+        A failure is logged at warning level with model + tenant so it is not
+        silent. ``base_url`` is a runtime snapshot: it is re-resolved on every
+        call, never cached.
         """
         model = (model or "").strip()
         if not model or self._inference_service_client_factory is None:
@@ -231,6 +234,58 @@ class KBServiceServicer(pb_grpc.KBServiceServicer):
                 model, tenant_id, exc,
             )
             return "", ""
+
+    async def _resolve_required_runtime_endpoint(
+        self, *, tenant_id: str, model: str, role: str, context
+    ) -> tuple[str, str]:
+        """Resolve a Q&A model to (runtime endpoint, canonical name) or abort.
+
+        Unlike the best-effort ``_resolve_runtime_endpoint``, the Q&A path
+        (Query/Retrieve) must NEVER silently fall back to a server-default
+        endpoint — the selected model IS the tenant boundary, and hitting an
+        empty endpoint produces an opaque rag-engine failure. This variant
+        therefore:
+
+        * aborts ``INVALID_ARGUMENT`` when no model is configured (neither the
+          request nor the KB ``default_inference_service`` supplied one) —
+          三级回落链 request → KB 默认 → 报错;
+        * aborts ``FAILED_PRECONDITION`` when the model cannot be resolved to a
+          running inference service (unpublished / not found / endpoint error).
+
+        ``role`` ("chat" / "embedding") labels the failing leg in messages.
+        When no resolver factory is wired (skeleton/test wiring) there is
+        nothing to enforce, so this degrades to the best-effort behaviour.
+        """
+        model = (model or "").strip()
+        if self._inference_service_client_factory is None:
+            return await self._resolve_runtime_endpoint(
+                tenant_id=tenant_id, model=model
+            )
+        if not model:
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT,
+                f"no {role} model configured: pass inference_service_name in "
+                f"the request or set the knowledge base default inference "
+                f"service",
+            )
+            return "", ""  # unreachable; for type checkers
+        try:
+            client = self._inference_service_client_factory()
+            resolved = await client.resolve_endpoint(
+                tenant_id=tenant_id, served_model_name=model
+            )
+            return resolved.base_url, resolved.served_model_name or model
+        except Exception as exc:  # noqa: BLE001 — surface, never degrade
+            logger.warning(
+                "kb-service: failed to resolve %s runtime endpoint for model "
+                "%r (tenant %s): %s",
+                role, model, tenant_id, exc,
+            )
+            context.abort(
+                grpc.StatusCode.FAILED_PRECONDITION,
+                f"failed to resolve {role} model {model!r}: {exc}",
+            )
+            return "", ""  # unreachable; for type checkers
 
     # ── 10 P0 RPCs ───────────────────────────────────────────────────────────
 
@@ -746,16 +801,13 @@ class KBServiceServicer(pb_grpc.KBServiceServicer):
                 if not kb_row:
                     context.abort(grpc.StatusCode.NOT_FOUND, "knowledge base not found")
                     return
-                if kb_row.get("status") == "rebuilding":
-                    # B6 (#24): deletes are mutually exclusive with a running
-                    # full-KB rebuild (the rebuild consumer's restoring
-                    # transition is conditional on rebuilding → active, so a
-                    # concurrent delete leaves no stuck state).
-                    context.abort(
-                        grpc.StatusCode.FAILED_PRECONDITION,
-                        "knowledge base is rebuilding",
-                    )
-                    return
+                # 删除优先于重建（原 B6 #24 互斥 guard 已移除）：rebuilding KB
+                # 可删——重建卡死时 KB 不能被永久锁死（线上 409 事故）。安全性
+                # 由 consumer 侧已有 guards 兜底：开头 get_kb（过滤 deleted）
+                # 未命中 → skip + task failed；退出转换 rebuilding→active 是
+                # 条件 UPDATE（set_status_in_tx），KB 已删则 no-op；逐文档
+                # 处理前 re-check 文档行。OpenAPI 契约 DELETE 亦仅声明
+                # 204/404（无 409）。
                 await audit_repo.insert_audit_in_tx(
                     conn,
                     tenant_id=tenant_id,
@@ -1723,6 +1775,7 @@ class KBServiceServicer(pb_grpc.KBServiceServicer):
                 vector_store_id=str(kb_row.get("vector_store_id") or ""),
                 embedding_model=kb_cfg["embedding_model"],
                 cache=cache,
+                context=context,
             )
         except Exception as e:
             await self._on_query_failure(
@@ -2006,14 +2059,16 @@ class KBServiceServicer(pb_grpc.KBServiceServicer):
             self._orchestrators[tenant_id] = orch
 
         # 7.5. Resolve per-model runtime endpoints (embed vs chat are distinct
-        #      inference services → distinct endpoints). The canonical
-        #      served_model_name is used as the request-body model; on
-        #      degradation the KB-config names are kept.
-        embed_endpoint, embed_model = await self._resolve_runtime_endpoint(
-            tenant_id=tenant_id, model=kb_cfg["embedding_model"]
+        #      inference services → distinct endpoints). Strict on the Q&A
+        #      path: a missing/unresolvable model aborts instead of silently
+        #      falling back to the rag-engine server default.
+        embed_endpoint, embed_model = await self._resolve_required_runtime_endpoint(
+            tenant_id=tenant_id, model=kb_cfg["embedding_model"],
+            role="embedding", context=context,
         )
-        generate_endpoint, generate_model = await self._resolve_runtime_endpoint(
-            tenant_id=tenant_id, model=inference_service_name
+        generate_endpoint, generate_model = await self._resolve_required_runtime_endpoint(
+            tenant_id=tenant_id, model=inference_service_name, role="chat",
+            context=context,
         )
 
         # 8. Delegate to orchestrator.query_stream (single source of gate
@@ -2383,6 +2438,7 @@ class KBServiceServicer(pb_grpc.KBServiceServicer):
         vector_store_id: str,
         embedding_model: str = "",
         cache: Any,
+        context: Any,
     ) -> QueryResult:
         """QueryOrchestrator: retrieve → gates → Generate RPC.
 
@@ -2422,14 +2478,17 @@ class KBServiceServicer(pb_grpc.KBServiceServicer):
         # 3. Resolve per-model runtime endpoints. The embedding model and the
         #    chat model are two distinct inference services with distinct
         #    endpoints; resolve each from its own model name so the embed and
-        #    generate legs connect to the right service. The canonical
-        #    served_model_name is used as the request-body model; on
-        #    degradation the KB-config names are kept.
-        embed_endpoint, embed_model = await self._resolve_runtime_endpoint(
-            tenant_id=tenant_id, model=embedding_model
+        #    generate legs connect to the right service. The Q&A path is
+        #    strict: a missing/unresolvable model aborts instead of silently
+        #    falling back to the rag-engine server default (三级回落链
+        #    request → KB 默认 → 报错).
+        embed_endpoint, embed_model = await self._resolve_required_runtime_endpoint(
+            tenant_id=tenant_id, model=embedding_model, role="embedding",
+            context=context,
         )
-        generate_endpoint, generate_model = await self._resolve_runtime_endpoint(
-            tenant_id=tenant_id, model=inference_service_name
+        generate_endpoint, generate_model = await self._resolve_required_runtime_endpoint(
+            tenant_id=tenant_id, model=inference_service_name, role="chat",
+            context=context,
         )
 
         # 4. Run the orchestrator.

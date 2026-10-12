@@ -608,11 +608,15 @@ async def test_rebuild_task_payload_records_kb_settings():
 
 # ── mutex matrix: write servicers vs a rebuilding KB ─────────────────────────
 #
-# B6 #24: while a full-KB rebuild runs (KB status='rebuilding'), every
-# write servicer short-circuits at its KB gate with FAILED_PRECONDITION
-# ("knowledge base is rebuilding") before any business write. The gate
-# read is a plain get_kb — the 'rebuilding' row must survive the earlier
-# idempotency-replay lookup (existing_task=None keeps the flow honest).
+# B6 #24 (amended): while a full-KB rebuild runs (KB status='rebuilding'),
+# the write servicers short-circuit at their KB gate with
+# FAILED_PRECONDITION ("knowledge base is rebuilding") before any business
+# write — EXCEPT DeleteKB: 删除优先于重建（rebuilding KB 可删，重建卡死
+# 不能永久锁死 KB），consumer 侧 guards（get_kb miss → skip；条件退出
+# 转换 no-op；逐文档 re-check）保证并发删除安全。
+# The gate read is a plain get_kb — the 'rebuilding' row must survive the
+# earlier idempotency-replay lookup (existing_task=None keeps the flow
+# honest).
 
 
 def _rebuilding_conn():
@@ -639,18 +643,44 @@ async def test_mutex_update_kb_rejected_while_rebuilding():
     )
 
 
-async def test_mutex_delete_kb_rejected_while_rebuilding():
+async def test_delete_kb_allowed_while_rebuilding():
+    """DeleteKB 删除优先于重建：rebuilding KB 可删（互斥 guard 已移除）。
+
+    断言完整删除链路照常执行：audit insert → soft-delete cascade →
+    kb.create replay 清理 → Milvus drop_collection → 对象前缀清理，
+    全程无 FAILED_PRECONDITION abort。
+    """
+    dropped: list[str] = []
+    removed: list[str] = []
+
+    class _RecordingVectorStore:
+        async def drop_collection(self, *, name):
+            dropped.append(name)
+
+    class _RecordingObjectStore:
+        async def remove_objects_by_prefix(self, *, prefix):
+            removed.append(prefix)
+
     conn = _rebuilding_conn()
-    servicer = _make_servicer(conn)
+    servicer = KBServiceServicer(
+        pool=_Pool(conn),
+        vector_store=_RecordingVectorStore(),
+        object_store=_RecordingObjectStore(),
+    )
     ctx = _ServicerContext()
-    with pytest.raises(RuntimeError, match="FAILED_PRECONDITION"):
-        await servicer._delete_kb(
-            kb_pb.DeleteKBRequest(tenant_id=TENANT_ID, kb_id=KB_ID), ctx
-        )
-    assert ctx.aborted[0] == grpc.StatusCode.FAILED_PRECONDITION
-    # No soft-delete UPDATE, no audit insert.
-    assert not any("status = 'deleted'" in s for s, _ in conn.execute_calls)
-    assert not any("INSERT INTO kb_audit_log" in s for s, _ in conn.fetchrow_calls)
+    await servicer._delete_kb(
+        kb_pb.DeleteKBRequest(tenant_id=TENANT_ID, kb_id=KB_ID), ctx
+    )
+    assert ctx.aborted is None
+    # Soft-delete UPDATE + dependents DELETE ran inside the cascade.
+    assert any("status = 'deleted'" in s for s, _ in conn.execute_calls)
+    assert any("DELETE FROM kb_chunks" in s for s, _ in conn.execute_calls)
+    # Audit row (kb.delete) written in the same transaction.
+    assert any("INSERT INTO kb_audit_log" in s for s, _ in conn.fetchrow_calls)
+    # Best-effort external cleanup used the persisted collection name and
+    # the {kb_id}/ object prefix.
+    assert dropped == [_kb_row()["vector_store_id"]]
+    assert removed == [f"{KB_ID}/"]
 
 
 async def test_mutex_upload_url_rejected_while_rebuilding():

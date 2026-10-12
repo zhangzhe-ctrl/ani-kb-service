@@ -154,10 +154,16 @@ kb-service 以 `(tenant_id, served_model_name)` 调用 inference-service 的内�
 
 | 错误 | 语义 | kb 侧处理 |
 |---|---|---|
-| `NOT_FOUND` | 当前租户没有该 served_model_name | `InferenceServiceNotFoundError`，降级 rag-engine 默认并告警 |
-| `INFERENCE_SERVICE_NOT_READY` | 服务存在但未 running | 客户端内等待 0.5s 重试一次，仍失败则 `InferenceServiceNotReadyError` |
-| `RUNTIME_ENDPOINT_MISSING` / `RUNTIME_ENDPOINT_INVALID` | endpoint 缺失/非法 | `InferenceServiceEndpointError`（重试并记录告警） |
-| `INVALID_ARGUMENT` | tenant_id / served_model_name 非法 | `InferenceServiceClientError` |
+| `NOT_FOUND` | 当前租户没有该 served_model_name | `InferenceServiceNotFoundError`；**问答链路（Query/Retrieve）报错**（`FAILED_PRECONDITION`），不降级 |
+| `INFERENCE_SERVICE_NOT_READY` | 服务存在但未 running | 客户端内等待 0.5s 重试一次，仍失败则 `InferenceServiceNotReadyError`（问答链路报错） |
+| `RUNTIME_ENDPOINT_MISSING` / `RUNTIME_ENDPOINT_INVALID` | endpoint 缺失/非法 | `InferenceServiceEndpointError`（问答链路报错并记录告警） |
+| `INVALID_ARGUMENT` | tenant_id / served_model_name 非法 | `InferenceServiceClientError`（问答链路报错） |
+
+> **问答链路严格解析**：`Query`/`Retrieve` 走 `_resolve_required_runtime_endpoint`，
+> 三级回落链为 **请求 `inference_service_name` → KB 行 `default_inference_service` → 报错**：
+> 两者都空 → `INVALID_ARGUMENT`；模型无法解析为 running 服务 → `FAILED_PRECONDITION`。
+> 不再静默回退 rag-engine 默认端点/默认模型。仅非问答链路（建库维度探测、后台文档
+> 解析消费者）保留 best-effort 降级（模型可空、解析失败仅告警不阻断）。
 
 解析结果（`base_url` + 规范化 `served_model_name`）经 `rag.v1` 的 Embed/Generate 请求
 （`runtime_endpoint` + `model` 字段）透传给 rag-engine 直连调用：Embed 落

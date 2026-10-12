@@ -28,7 +28,23 @@ import grpc
 import pytest
 
 _SERVICE_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-_REPO_ROOT = os.path.abspath(os.path.join(_SERVICE_ROOT, "..", ".."))
+# KB-SPLIT-P5B（#069）镜像根解析：拆分后 ani-kb-service 与 monorepo 检出并排于
+# 同一工作区（P5A 选型：工作区根 ani-kb-service，monorepo 为兄弟目录 repo/）。
+# 镜像根优先取「并排 monorepo repo/」，其次兼容历史 monorepo 内布局
+# （repo/services/kb-service，上两级即 repo/）；两者都不在（真独立检出）时
+# _REPO_ROOT 指向不存在路径，pin 组按 P5A 既有语义 skip，仓库内 pin 语义由
+# 「生成物 ↔ proto 源一致」测试组继续强制。
+def _resolve_repo_root():
+    sibling = os.path.abspath(os.path.join(_SERVICE_ROOT, "..", "repo"))
+    if os.path.isdir(os.path.join(sibling, "api", "proto")):
+        return sibling
+    legacy = os.path.abspath(os.path.join(_SERVICE_ROOT, "..", ".."))
+    if os.path.isdir(os.path.join(legacy, "api", "proto")):
+        return legacy
+    return sibling
+
+
+_REPO_ROOT = _resolve_repo_root()
 sys.path.insert(0, _SERVICE_ROOT)
 sys.path.insert(0, os.path.join(_SERVICE_ROOT, "app", "generated"))
 

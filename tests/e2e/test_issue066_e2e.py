@@ -61,8 +61,16 @@ from pathlib import Path
 from typing import Any
 
 # ── paths ────────────────────────────────────────────────────────────────────
-REPO = Path(__file__).resolve().parents[4]  # repo/
-KB_SVC = REPO / "services" / "kb-service"
+# KB-SPLIT-P5B (#069) 拆分布局适配：本套件自 monorepo repo/services/kb-service
+# 平移至独立仓库 ani-kb-service（issue #068，squash 迁移）。路径基准由
+# 「monorepo repo/」改为「独立仓库根 + monorepo 检出」——kb-service 代码在
+# 本仓库，rag-engine 与 ani-gateway 仍留在 monorepo（依赖方；gateway 经
+# `go build -o bin/ani-gateway.exe ./services/ani-gateway` 构建后由本套件
+# 以 KB_SERVICE_GRPC_ADDR=localhost:50053 驱动，即 #069 路由切换指向）。
+KB_ROOT = Path(__file__).resolve().parents[2]  # ani-kb-service 仓库根
+ANI_WORKSPACE = KB_ROOT.parent                 # ANI 工作区（monorepo 所在）
+REPO = ANI_WORKSPACE / "repo"                  # monorepo repo/
+KB_SVC = KB_ROOT                               # 原 repo/services/kb-service
 RAG_ENGINE = REPO / "ai" / "rag-engine"
 GATEWAY_EXE = REPO / "bin" / "ani-gateway.exe"
 E2E_LOG = KB_SVC / "tests" / "e2e" / "e2e_issue066_result.log"

@@ -63,6 +63,7 @@ async def _get(path):
 async def _all_dependencies_down():
     return {
         "nats": {"healthy": False, "detail": "down"},
+        "redis": {"healthy": False, "detail": "down"},
         "rag_engine": {"healthy": False, "detail": "down"},
         "milvus": {"healthy": False, "detail": "down"},
         "minio": {"healthy": False, "detail": "down"},
@@ -103,6 +104,7 @@ async def test_readyz_ok_when_core_gates_up_even_if_dependencies_down(monkeypatc
     assert components["rebuild_consumer"] is False
     # Dependency health is surfaced for observability only.
     assert body["dependencies"]["nats"]["healthy"] is False
+    assert body["dependencies"]["redis"]["healthy"] is False
     assert body["dependencies"]["milvus"]["healthy"] is False
 
 
@@ -143,6 +145,24 @@ async def test_probe_tcp_unreachable_is_reported_not_raised():
     result = await main._probe_tcp("256.256.256.256:1", timeout=0.2)
     assert result["healthy"] is False
     assert result["detail"]
+
+
+async def test_probe_dependencies_reports_redis_and_never_gates(monkeypatch):
+    """Redis is surfaced as a report-only dependency: an unreachable Redis
+    (probed from settings.redis_url) yields an unhealthy report and must NOT
+    flip /readyz to degraded — Redis down is in-design DB-only degradation."""
+    real_probe = main._probe_dependencies
+    monkeypatch.setattr(main.settings, "redis_url", "redis://127.0.0.1:1/0")
+    _set_core_gates(monkeypatch)
+    # Restore the real probe so the redis derivation under test actually runs.
+    monkeypatch.setattr(main, "_probe_dependencies", real_probe)
+
+    resp = await _get("/readyz")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["dependencies"]["redis"]["healthy"] is False
 
 
 async def test_metrics_endpoint_serves_prometheus_text():
